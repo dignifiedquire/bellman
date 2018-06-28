@@ -10,6 +10,8 @@
 //! This allows us to perform polynomial operations in O(n)
 //! by performing an O(n log n) FFT over such a domain.
 
+use rayon::prelude::*;
+
 use pairing::{
     Engine,
     Field,
@@ -88,33 +90,42 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn ifft(&mut self, worker: &Worker)
     {
         best_fft(&mut self.coeffs, worker, &self.omegainv, self.exp);
+        let minv = self.minv;
 
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            let minv = self.minv;
-
-            for v in self.coeffs.chunks_mut(chunk) {
-                scope.spawn(move || {
-                    for v in v {
-                        v.group_mul_assign(&minv);
-                    }
-                });
-            }
+        self.coeffs.par_iter_mut().for_each(|v| {
+            v.group_mul_assign(&minv);
         });
+
+        // worker.scope(self.coeffs.len(), |scope, chunk| {
+        //     let minv = self.minv;
+
+        //     for v in self.coeffs.chunks_mut(chunk) {
+        //         scope.spawn(move || {
+        //             for v in v {
+        //                 v.group_mul_assign(&minv);
+        //             }
+        //         });
+        //     }
+        // });
     }
 
     pub fn distribute_powers(&mut self, worker: &Worker, g: E::Fr)
     {
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
-                scope.spawn(move || {
-                    let mut u = g.pow(&[(i * chunk) as u64]);
-                    for v in v.iter_mut() {
-                        v.group_mul_assign(&u);
-                        u.mul_assign(&g);
-                    }
-                });
-            }
+        self.coeffs.par_iter_mut().enumerate().for_each(|(i, v)| {
+            v.group_mul_assign(&g.pow(&[i as u64]));
         });
+
+        // worker.scope(self.coeffs.len(), |scope, chunk| {
+        //     for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
+        //         scope.spawn(move || {
+        //             let mut u = g.pow(&[(i * chunk) as u64]);
+        //             for v in v.iter_mut() {
+        //                 v.group_mul_assign(&u);
+        //                 u.mul_assign(&g);
+        //             }
+        //         });
+        //     }
+        // });
     }
 
     pub fn coset_fft(&mut self, worker: &Worker)
@@ -146,46 +157,54 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     pub fn divide_by_z_on_coset(&mut self, worker: &Worker)
     {
         let i = self.z(&E::Fr::multiplicative_generator()).inverse().unwrap();
+        self.coeffs.par_iter_mut().for_each(|v| v.group_mul_assign(&i));
 
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            for v in self.coeffs.chunks_mut(chunk) {
-                scope.spawn(move || {
-                    for v in v {
-                        v.group_mul_assign(&i);
-                    }
-                });
-            }
-        });
+        // worker.scope(self.coeffs.len(), |scope, chunk| {
+        //     for v in self.coeffs.chunks_mut(chunk) {
+        //         scope.spawn(move || {
+        //             for v in v {
+        //                 v.group_mul_assign(&i);
+        //             }
+        //         });
+        //     }
+        // });
     }
 
     /// Perform O(n) multiplication of two polynomials in the domain.
     pub fn mul_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, Scalar<E>>) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
-                scope.spawn(move || {
-                    for (a, b) in a.iter_mut().zip(b.iter()) {
-                        a.group_mul_assign(&b.0);
-                    }
-                });
-            }
+        self.coeffs.par_iter_mut().zip(other.coeffs.par_iter()).for_each(|(a, b)| {
+            a.group_mul_assign(&b.0);
         });
+        // worker.scope(self.coeffs.len(), |scope, chunk| {
+        //     for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
+        //         scope.spawn(move || {
+        //             for (a, b) in a.iter_mut().zip(b.iter()) {
+        //                 a.group_mul_assign(&b.0);
+        //             }
+        //         });
+        //     }
+        // });
     }
 
     /// Perform O(n) subtraction of one polynomial from another in the domain.
     pub fn sub_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, G>) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
-        worker.scope(self.coeffs.len(), |scope, chunk| {
-            for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
-                scope.spawn(move || {
-                    for (a, b) in a.iter_mut().zip(b.iter()) {
-                        a.group_sub_assign(&b);
-                    }
-                });
-            }
+        self.coeffs.par_iter_mut().zip(other.coeffs.par_iter()).for_each(|(a, b)| {
+            a.group_sub_assign(&b);
         });
+
+        // worker.scope(self.coeffs.len(), |scope, chunk| {
+        //     for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
+        //         scope.spawn(move || {
+        //             for (a, b) in a.iter_mut().zip(b.iter()) {
+        //                 a.group_sub_assign(&b);
+        //             }
+        //         });
+        //     }
+        // });
     }
 }
 
@@ -329,47 +348,31 @@ fn parallel_fft<E: Engine, T: Group<E>>(
     let mut tmp = vec![vec![T::group_zero(); 1 << log_new_n]; num_cpus];
     let new_omega = omega.pow(&[num_cpus as u64]);
 
-    worker.scope(0, |scope, _| {
-        let a = &*a;
+    tmp.par_iter_mut().enumerate().for_each(|(j, tmp)| {
+        // Shuffle into a sub-FFT
+        let omega_j = omega.pow(&[j as u64]);
+        let omega_step = omega.pow(&[(j as u64) << log_new_n]);
 
-        for (j, tmp) in tmp.iter_mut().enumerate() {
-            scope.spawn(move || {
-                // Shuffle into a sub-FFT
-                let omega_j = omega.pow(&[j as u64]);
-                let omega_step = omega.pow(&[(j as u64) << log_new_n]);
-
-                let mut elt = E::Fr::one();
-                for i in 0..(1 << log_new_n) {
-                    for s in 0..num_cpus {
-                        let idx = (i + (s << log_new_n)) % (1 << log_n);
-                        let mut t = a[idx];
-                        t.group_mul_assign(&elt);
-                        tmp[i].group_add_assign(&t);
-                        elt.mul_assign(&omega_step);
-                    }
-                    elt.mul_assign(&omega_j);
-                }
-
-                // Perform sub-FFT
-                serial_fft(tmp, &new_omega, log_new_n);
-            });
+        let mut elt = E::Fr::one();
+        for i in 0..(1 << log_new_n) {
+            for s in 0..num_cpus {
+                let idx = (i + (s << log_new_n)) % (1 << log_n);
+                let mut t = a[idx];
+                t.group_mul_assign(&elt);
+                tmp[i].group_add_assign(&t);
+                elt.mul_assign(&omega_step);
+            }
+            elt.mul_assign(&omega_j);
         }
+
+        // Perform sub-FFT
+        serial_fft(tmp, &new_omega, log_new_n);
     });
 
     // TODO: does this hurt or help?
-    worker.scope(a.len(), |scope, chunk| {
-        let tmp = &tmp;
-
-        for (idx, a) in a.chunks_mut(chunk).enumerate() {
-            scope.spawn(move || {
-                let mut idx = idx * chunk;
-                let mask = (1 << log_cpus) - 1;
-                for a in a {
-                    *a = tmp[idx & mask][idx >> log_cpus];
-                    idx += 1;
-                }
-            });
-        }
+    a.par_iter_mut().enumerate().for_each(|(idx, a)| {
+        let mask = (1 << log_cpus) - 1;
+        *a = tmp[idx & mask][idx >> log_cpus];
     });
 }
 
