@@ -4,9 +4,6 @@ extern crate test;
 
 extern crate bit_vec;
 extern crate byteorder;
-extern crate crossbeam;
-extern crate futures;
-extern crate futures_cpupool;
 extern crate num_cpus;
 extern crate pairing;
 extern crate rand;

@@ -1,6 +1,4 @@
-use super::multicore::Worker;
 use bit_vec::{self, BitVec};
-use futures::Future;
 use pairing::{CurveAffine, CurveProjective, Engine, Field, PrimeField, PrimeFieldRepr};
 use rayon;
 use std::io;
@@ -144,7 +142,6 @@ impl DensityTracker {
 }
 
 fn multiexp_inner<Q, D, G, S>(
-    pool: &Worker,
     bases: S,
     density_map: D,
     exponents: Arc<Vec<<<G::Engine as Engine>::Fr as PrimeField>::Repr>>,
@@ -233,7 +230,6 @@ where
                 // There's another region more significant. Calculate and join it with
                 // this region recursively.
                 multiexp_inner(
-                    pool,
                     bases.clone(),
                     density_map.clone(),
                     exponents.clone(),
@@ -263,7 +259,6 @@ where
 /// Perform multi-exponentiation. The caller is responsible for ensuring the
 /// query size is the same as the number of exponents.
 pub fn multiexp<Q, D, G, S>(
-    pool: &Worker,
     bases: S,
     density_map: D,
     exponents: Arc<Vec<<<G::Engine as Engine>::Fr as PrimeField>::Repr>>,
@@ -287,14 +282,12 @@ where
         assert!(query_size == exponents.len());
     }
 
-    multiexp_inner(pool, bases, density_map, exponents, 0, c, true)
+    multiexp_inner(bases, density_map, exponents, 0, c, true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::Future;
-    use multicore::Worker;
     use pairing::bls12_381::Bls12;
     use pairing::{CurveAffine, CurveProjective, Engine, PrimeField};
     use rand::{self, Rand};
@@ -352,9 +345,7 @@ mod tests {
 
         let naive = naive_multiexp(g.clone(), v.clone());
 
-        let pool = Worker::new();
-
-        let fast = multiexp(&pool, (g.clone(), 0), FullDensity, v.clone()).unwrap();
+        let fast = multiexp((g.clone(), 0), FullDensity, v.clone()).unwrap();
 
         let par_iter = multiexp_par_iter(g.to_vec(), v.to_vec());
 
@@ -387,8 +378,6 @@ mod tests {
         let rng = &mut rand::thread_rng();
 
         b.iter(|| {
-            let pool = Worker::new();
-
             let v = Arc::new(
                 (0..SAMPLES)
                     .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
@@ -400,7 +389,7 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
 
-            multiexp(&pool, (g, 0), FullDensity, v)/*.wait()*/.unwrap()
+            multiexp((g, 0), FullDensity, v).unwrap()
         });
     }
 

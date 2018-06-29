@@ -5,80 +5,9 @@
 //! allow for various parallelism strategies.
 
 use num_cpus;
-use futures::{Future, IntoFuture, Poll};
-use futures_cpupool::{CpuPool, CpuFuture};
-use crossbeam::{self, Scope};
 
-#[derive(Clone)]
-pub struct Worker {
-    cpus: usize,
-    pool: CpuPool
-}
-
-impl Worker {
-    // We don't expose this outside the library so that
-    // all `Worker` instances have the same number of
-    // CPUs configured.
-    pub(crate) fn new_with_cpus(cpus: usize) -> Worker {
-        Worker {
-            cpus: cpus,
-            pool: CpuPool::new(cpus)
-        }
-    }
-
-    pub fn new() -> Worker {
-        Self::new_with_cpus(num_cpus::get())
-    }
-
-    pub fn log_num_cpus(&self) -> u32 {
-        log2_floor(self.cpus)
-    }
-
-    pub fn compute<F, R>(
-        &self, f: F
-    ) -> WorkerFuture<R::Item, R::Error>
-        where F: FnOnce() -> R + Send + 'static,
-              R: IntoFuture + 'static,
-              R::Future: Send + 'static,
-              R::Item: Send + 'static,
-              R::Error: Send + 'static
-    {
-        WorkerFuture {
-            future: self.pool.spawn_fn(f)
-        }
-    }
-
-    pub fn scope<'a, F, R>(
-        &self,
-        elements: usize,
-        f: F
-    ) -> R
-        where F: FnOnce(&Scope<'a>, usize) -> R
-    {
-        let chunk_size = if elements < self.cpus {
-            1
-        } else {
-            elements / self.cpus
-        };
-
-        crossbeam::scope(|scope| {
-            f(scope, chunk_size)
-        })
-    }
-}
-
-pub struct WorkerFuture<T, E> {
-    future: CpuFuture<T, E>
-}
-
-impl<T: Send + 'static, E: Send + 'static> Future for WorkerFuture<T, E> {
-    type Item = T;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error>
-    {
-        self.future.poll()
-    }
+pub fn log_num_cpus() -> u32 {
+    log2_floor(num_cpus::get())
 }
 
 fn log2_floor(num: usize) -> u32 {
@@ -86,7 +15,7 @@ fn log2_floor(num: usize) -> u32 {
 
     let mut pow = 0;
 
-    while (1 << (pow+1)) <= num {
+    while (1 << (pow + 1)) <= num {
         pow += 1;
     }
 

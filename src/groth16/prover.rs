@@ -2,8 +2,6 @@ use rand::Rng;
 
 use std::sync::Arc;
 
-use futures::Future;
-
 use pairing::{CurveAffine, CurveProjective, Engine, Field, PrimeField};
 
 use super::{ParameterSource, Proof};
@@ -13,8 +11,6 @@ use {Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variab
 use domain::{EvaluationDomain, Scalar};
 
 use multiexp::{multiexp, DensityTracker, FullDensity};
-
-use multicore::Worker;
 
 use rayon::prelude::*;
 use rayon;
@@ -204,8 +200,6 @@ where
         prover.enforce(|| "", |lc| lc + Variable(Index::Input(i)), |lc| lc, |lc| lc);
     }
 
-    let worker = Worker::new();
-
     let vk = params.get_vk(prover.input_assignment.len())?;
     if vk.delta_g1.is_zero() || vk.delta_g2.is_zero() {
         // If this element is zero, someone is trying to perform a
@@ -258,14 +252,12 @@ where
     ) = rayon::join(|| {
         let (a_aux, a_inputs) = rayon::join(|| {
             multiexp(
-                &worker,
                 a_aux_source,
                 a_aux_density,
                 aux_assignment.clone(),
             )
         }, || {
             multiexp(
-                &worker,
                 a_inputs_source,
                 FullDensity,
                 input_assignment.clone(),
@@ -283,14 +275,12 @@ where
     }, || {
         let (b_g1_inputs, b_g1_aux) = rayon::join(|| {
             multiexp(
-                &worker,
                 b_g1_inputs_source,
                 b_input_density.clone(),
                 input_assignment.clone(),
             )
         }, || {
             multiexp(
-                &worker,
                 b_g1_aux_source,
                 b_aux_density.clone(),
                 aux_assignment.clone(),
@@ -299,14 +289,12 @@ where
 
         let (b_g2_inputs, b_g2_aux) = rayon::join(|| {
             multiexp(
-                &worker,
                 b_g2_inputs_source,
                 b_input_density,
                 input_assignment.clone(),
             )
         }, || {
             multiexp(
-                &worker,
                 b_g2_aux_source,
                 b_aux_density,
                 aux_assignment.clone()
@@ -334,31 +322,30 @@ where
         let mut a = EvaluationDomain::from_coeffs(prover.a)?;
         let mut b = EvaluationDomain::from_coeffs(prover.b)?;
         let mut c = EvaluationDomain::from_coeffs(prover.c)?;
-        a.ifft(&worker);
-        a.coset_fft(&worker);
-        b.ifft(&worker);
-        b.coset_fft(&worker);
-        c.ifft(&worker);
-        c.coset_fft(&worker);
+        a.ifft();
+        a.coset_fft();
+        b.ifft();
+        b.coset_fft();
+        c.ifft();
+        c.coset_fft();
 
-        a.mul_assign(&worker, &b);
+        a.mul_assign(&b);
         drop(b);
-        a.sub_assign(&worker, &c);
+        a.sub_assign(&c);
         drop(c);
-        a.divide_by_z_on_coset(&worker);
-        a.icoset_fft(&worker);
+        a.divide_by_z_on_coset();
+        a.icoset_fft();
         let mut a = a.into_coeffs();
         let a_len = a.len() - 1;
         a.truncate(a_len);
 
         let a = Arc::new(a.into_par_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>());
 
-        multiexp(&worker, params.get_h(a.len())?, FullDensity, a)
+        multiexp(params.get_h(a.len())?, FullDensity, a)
     };
 
 
     let l = multiexp(
-        &worker,
         params.get_l(aux_assignment.len())?,
         FullDensity,
         aux_assignment.clone(),

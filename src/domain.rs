@@ -23,7 +23,7 @@ use super::{
     SynthesisError
 };
 
-use super::multicore::Worker;
+use multicore;
 
 pub struct EvaluationDomain<E: Engine, G: Group<E>> {
     coeffs: Vec<G>,
@@ -82,64 +82,40 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
         })
     }
 
-    pub fn fft(&mut self, worker: &Worker)
+    pub fn fft(&mut self)
     {
-        best_fft(&mut self.coeffs, worker, &self.omega, self.exp);
+        best_fft(&mut self.coeffs, &self.omega, self.exp);
     }
 
-    pub fn ifft(&mut self, worker: &Worker)
+    pub fn ifft(&mut self)
     {
-        best_fft(&mut self.coeffs, worker, &self.omegainv, self.exp);
+        best_fft(&mut self.coeffs, &self.omegainv, self.exp);
         let minv = self.minv;
 
         self.coeffs.par_iter_mut().for_each(|v| {
             v.group_mul_assign(&minv);
         });
-
-        // worker.scope(self.coeffs.len(), |scope, chunk| {
-        //     let minv = self.minv;
-
-        //     for v in self.coeffs.chunks_mut(chunk) {
-        //         scope.spawn(move || {
-        //             for v in v {
-        //                 v.group_mul_assign(&minv);
-        //             }
-        //         });
-        //     }
-        // });
     }
 
-    pub fn distribute_powers(&mut self, worker: &Worker, g: E::Fr)
+    pub fn distribute_powers(&mut self, g: E::Fr)
     {
         self.coeffs.par_iter_mut().enumerate().for_each(|(i, v)| {
             v.group_mul_assign(&g.pow(&[i as u64]));
         });
-
-        // worker.scope(self.coeffs.len(), |scope, chunk| {
-        //     for (i, v) in self.coeffs.chunks_mut(chunk).enumerate() {
-        //         scope.spawn(move || {
-        //             let mut u = g.pow(&[(i * chunk) as u64]);
-        //             for v in v.iter_mut() {
-        //                 v.group_mul_assign(&u);
-        //                 u.mul_assign(&g);
-        //             }
-        //         });
-        //     }
-        // });
     }
 
-    pub fn coset_fft(&mut self, worker: &Worker)
+    pub fn coset_fft(&mut self)
     {
-        self.distribute_powers(worker, E::Fr::multiplicative_generator());
-        self.fft(worker);
+        self.distribute_powers(E::Fr::multiplicative_generator());
+        self.fft();
     }
 
-    pub fn icoset_fft(&mut self, worker: &Worker)
+    pub fn icoset_fft(&mut self)
     {
         let geninv = self.geninv;
 
-        self.ifft(worker);
-        self.distribute_powers(worker, geninv);
+        self.ifft();
+        self.distribute_powers(geninv);
     }
 
     /// This evaluates t(tau) for this domain, which is
@@ -154,57 +130,28 @@ impl<E: Engine, G: Group<E>> EvaluationDomain<E, G> {
     /// The target polynomial is the zero polynomial in our
     /// evaluation domain, so we must perform division over
     /// a coset.
-    pub fn divide_by_z_on_coset(&mut self, worker: &Worker)
+    pub fn divide_by_z_on_coset(&mut self)
     {
         let i = self.z(&E::Fr::multiplicative_generator()).inverse().unwrap();
         self.coeffs.par_iter_mut().for_each(|v| v.group_mul_assign(&i));
-
-        // worker.scope(self.coeffs.len(), |scope, chunk| {
-        //     for v in self.coeffs.chunks_mut(chunk) {
-        //         scope.spawn(move || {
-        //             for v in v {
-        //                 v.group_mul_assign(&i);
-        //             }
-        //         });
-        //     }
-        // });
     }
 
     /// Perform O(n) multiplication of two polynomials in the domain.
-    pub fn mul_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, Scalar<E>>) {
+    pub fn mul_assign(&mut self, other: &EvaluationDomain<E, Scalar<E>>) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
         self.coeffs.par_iter_mut().zip(other.coeffs.par_iter()).for_each(|(a, b)| {
             a.group_mul_assign(&b.0);
         });
-        // worker.scope(self.coeffs.len(), |scope, chunk| {
-        //     for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
-        //         scope.spawn(move || {
-        //             for (a, b) in a.iter_mut().zip(b.iter()) {
-        //                 a.group_mul_assign(&b.0);
-        //             }
-        //         });
-        //     }
-        // });
     }
 
     /// Perform O(n) subtraction of one polynomial from another in the domain.
-    pub fn sub_assign(&mut self, worker: &Worker, other: &EvaluationDomain<E, G>) {
+    pub fn sub_assign(&mut self, other: &EvaluationDomain<E, G>) {
         assert_eq!(self.coeffs.len(), other.coeffs.len());
 
         self.coeffs.par_iter_mut().zip(other.coeffs.par_iter()).for_each(|(a, b)| {
             a.group_sub_assign(&b);
         });
-
-        // worker.scope(self.coeffs.len(), |scope, chunk| {
-        //     for (a, b) in self.coeffs.chunks_mut(chunk).zip(other.coeffs.chunks(chunk)) {
-        //         scope.spawn(move || {
-        //             for (a, b) in a.iter_mut().zip(b.iter()) {
-        //                 a.group_sub_assign(&b);
-        //             }
-        //         });
-        //     }
-        // });
     }
 }
 
@@ -277,14 +224,14 @@ impl<E: Engine> Group<E> for Scalar<E> {
     }
 }
 
-fn best_fft<E: Engine, T: Group<E>>(a: &mut [T], worker: &Worker, omega: &E::Fr, log_n: u32)
+fn best_fft<E: Engine, T: Group<E>>(a: &mut [T], omega: &E::Fr, log_n: u32)
 {
-    let log_cpus = worker.log_num_cpus();
+    let log_cpus = multicore::log_num_cpus();
 
     if log_n <= log_cpus {
         serial_fft(a, omega, log_n);
     } else {
-        parallel_fft(a, worker, omega, log_n, log_cpus);
+        parallel_fft(a, omega, log_n, log_cpus);
     }
 }
 
@@ -335,7 +282,6 @@ fn serial_fft<E: Engine, T: Group<E>>(a: &mut [T], omega: &E::Fr, log_n: u32)
 
 fn parallel_fft<E: Engine, T: Group<E>>(
     a: &mut [T],
-    worker: &Worker,
     omega: &E::Fr,
     log_n: u32,
     log_cpus: u32
@@ -385,8 +331,6 @@ fn polynomial_arith() {
 
     fn test_mul<E: Engine, R: rand::Rng>(rng: &mut R)
     {
-        let worker = Worker::new();
-
         for coeffs_a in 0..70 {
             for coeffs_b in 0..70 {
                 let mut a: Vec<_> = (0..coeffs_a).map(|_| Scalar::<E>(E::Fr::rand(rng))).collect();
@@ -408,10 +352,10 @@ fn polynomial_arith() {
                 let mut a = EvaluationDomain::from_coeffs(a).unwrap();
                 let mut b = EvaluationDomain::from_coeffs(b).unwrap();
 
-                a.fft(&worker);
-                b.fft(&worker);
-                a.mul_assign(&worker, &b);
-                a.ifft(&worker);
+                a.fft();
+                b.fft();
+                a.mul_assign(&b);
+                a.ifft();
 
                 for (naive, fft) in naive.iter().zip(a.coeffs.iter()) {
                     assert!(naive == fft);
@@ -432,7 +376,6 @@ fn fft_composition() {
 
     fn test_comp<E: Engine, R: rand::Rng>(rng: &mut R)
     {
-        let worker = Worker::new();
 
         for coeffs in 0..10 {
             let coeffs = 1 << coeffs;
@@ -443,17 +386,17 @@ fn fft_composition() {
             }
 
             let mut domain = EvaluationDomain::from_coeffs(v.clone()).unwrap();
-            domain.ifft(&worker);
-            domain.fft(&worker);
+            domain.ifft();
+            domain.fft();
             assert!(v == domain.coeffs);
-            domain.fft(&worker);
-            domain.ifft(&worker);
+            domain.fft();
+            domain.ifft();
             assert!(v == domain.coeffs);
-            domain.icoset_fft(&worker);
-            domain.coset_fft(&worker);
+            domain.icoset_fft();
+            domain.coset_fft();
             assert!(v == domain.coeffs);
-            domain.coset_fft(&worker);
-            domain.icoset_fft(&worker);
+            domain.coset_fft();
+            domain.icoset_fft();
             assert!(v == domain.coeffs);
         }
     }
@@ -471,8 +414,6 @@ fn parallel_fft_consistency() {
 
     fn test_consistency<E: Engine, R: rand::Rng>(rng: &mut R)
     {
-        let worker = Worker::new();
-
         for _ in 0..5 {
             for log_d in 0..10 {
                 let d = 1 << log_d;
@@ -482,7 +423,7 @@ fn parallel_fft_consistency() {
                 let mut v2 = EvaluationDomain::from_coeffs(v1.coeffs.clone()).unwrap();
 
                 for log_cpus in log_d..min(log_d+1, 3) {
-                    parallel_fft(&mut v1.coeffs, &worker, &v1.omega, log_d, log_cpus);
+                    parallel_fft(&mut v1.coeffs, &v1.omega, log_d, log_cpus);
                     serial_fft(&mut v2.coeffs, &v2.omega, log_d);
 
                     assert!(v1.coeffs == v2.coeffs);
