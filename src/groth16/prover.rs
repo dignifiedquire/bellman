@@ -12,7 +12,6 @@ use domain::{EvaluationDomain, Scalar};
 
 use multiexp::{multiexp, DensityTracker, FullDensity};
 
-use rayon::prelude::*;
 use rayon;
 
 fn eval<E: Engine>(
@@ -210,14 +209,14 @@ where
     let input_assignment = Arc::new(
         prover
             .input_assignment
-            .par_iter()
+            .iter()
             .map(|s| s.into_repr())
             .collect::<Vec<_>>(),
     );
     let aux_assignment = Arc::new(
         prover
             .aux_assignment
-            .par_iter()
+            .iter()
             .map(|s| s.into_repr())
             .collect::<Vec<_>>(),
     );
@@ -246,9 +245,36 @@ where
     let b_input_density = Arc::new(prover.b_input_density);
     let b_aux_density = Arc::new(prover.b_aux_density);
 
-    let (a, b): (
+    let a_for_h = {
+        let mut a = EvaluationDomain::from_coeffs(prover.a)?;
+        let mut b = EvaluationDomain::from_coeffs(prover.b)?;
+        let mut c = EvaluationDomain::from_coeffs(prover.c)?;
+        a.ifft();
+        a.coset_fft();
+        b.ifft();
+        b.coset_fft();
+        c.ifft();
+        c.coset_fft();
+
+        a.mul_assign(&b);
+        drop(b);
+        a.sub_assign(&c);
+        drop(c);
+        a.divide_by_z_on_coset();
+        a.icoset_fft();
+        let mut a = a.into_coeffs();
+        let a_len = a.len() - 1;
+        a.truncate(a_len);
+
+        Arc::new(a.into_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>())
+    };
+
+    let h_params = params.get_h(a_for_h.len())?;
+    let l_params = params.get_l(aux_assignment.len())?;
+
+    let (a, second): (
         Result<(E::G1, E::G1), SynthesisError>,
-        Result<(E::G2, E::G1), SynthesisError>,
+        (Result<(E::G2, E::G1), SynthesisError>, (Result<E::G1, SynthesisError>, Result<E::G1, SynthesisError>)),
     ) = rayon::join(|| {
         let (a_aux, a_inputs) = rayon::join(|| {
             multiexp(
@@ -273,83 +299,59 @@ where
 
         Ok((g_a, a_answer))
     }, || {
-        let (b_g1_inputs, b_g1_aux) = rayon::join(|| {
-            multiexp(
-                b_g1_inputs_source,
-                b_input_density.clone(),
-                input_assignment.clone(),
-            )
+        rayon::join(|| {
+            let (b_g1_inputs, b_g1_aux) = rayon::join(|| {
+                multiexp(
+                    b_g1_inputs_source,
+                    b_input_density.clone(),
+                    input_assignment.clone(),
+                )
+            }, || {
+                multiexp(
+                    b_g1_aux_source,
+                    b_aux_density.clone(),
+                    aux_assignment.clone(),
+                )
+            });
+
+            let (b_g2_inputs, b_g2_aux) = rayon::join(|| {
+                multiexp(
+                    b_g2_inputs_source,
+                    b_input_density,
+                    input_assignment.clone(),
+                )
+            }, || {
+                multiexp(
+                    b_g2_aux_source,
+                    b_aux_density,
+                    aux_assignment.clone()
+                )
+            });
+
+            let mut g_b = vk.delta_g2.mul(s);
+            g_b.add_assign_mixed(&vk.beta_g2);
+
+            let mut b1_answer = b_g1_inputs?;
+            b1_answer.add_assign(&b_g1_aux?);
+            let mut b2_answer = b_g2_inputs?;
+            b2_answer.add_assign(&b_g2_aux?);
+
+            g_b.add_assign(&b2_answer);
+            b1_answer.mul_assign(r);
+
+            Ok((g_b, b1_answer))
         }, || {
-            multiexp(
-                b_g1_aux_source,
-                b_aux_density.clone(),
-                aux_assignment.clone(),
-            )
-        });
-
-        let (b_g2_inputs, b_g2_aux) = rayon::join(|| {
-            multiexp(
-                b_g2_inputs_source,
-                b_input_density,
-                input_assignment.clone(),
-            )
-        }, || {
-            multiexp(
-                b_g2_aux_source,
-                b_aux_density,
-                aux_assignment.clone()
-            )
-        });
-
-        let mut g_b = vk.delta_g2.mul(s);
-        g_b.add_assign_mixed(&vk.beta_g2);
-
-        let mut b1_answer = b_g1_inputs?;
-        b1_answer.add_assign(&b_g1_aux?);
-        let mut b2_answer = b_g2_inputs?;
-        b2_answer.add_assign(&b_g2_aux?);
-
-        g_b.add_assign(&b2_answer);
-        b1_answer.mul_assign(r);
-
-        Ok((g_b, b1_answer))
+            rayon::join(|| {
+                multiexp(h_params, FullDensity, a_for_h)
+            }, || {
+                multiexp(l_params, FullDensity, aux_assignment.clone())
+            })
+        })
     });
 
     let (g_a, a_answer) = a?;
+    let (b, (h, l)) = second;
     let (g_b, b1_answer) = b?;
-
-    let h = {
-        let mut a = EvaluationDomain::from_coeffs(prover.a)?;
-        let mut b = EvaluationDomain::from_coeffs(prover.b)?;
-        let mut c = EvaluationDomain::from_coeffs(prover.c)?;
-        a.ifft();
-        a.coset_fft();
-        b.ifft();
-        b.coset_fft();
-        c.ifft();
-        c.coset_fft();
-
-        a.mul_assign(&b);
-        drop(b);
-        a.sub_assign(&c);
-        drop(c);
-        a.divide_by_z_on_coset();
-        a.icoset_fft();
-        let mut a = a.into_coeffs();
-        let a_len = a.len() - 1;
-        a.truncate(a_len);
-
-        let a = Arc::new(a.into_par_iter().map(|s| s.0.into_repr()).collect::<Vec<_>>());
-
-        multiexp(params.get_h(a.len())?, FullDensity, a)
-    };
-
-
-    let l = multiexp(
-        params.get_l(aux_assignment.len())?,
-        FullDensity,
-        aux_assignment.clone(),
-    );
 
     let g_c = {
         let mut rs = r;
