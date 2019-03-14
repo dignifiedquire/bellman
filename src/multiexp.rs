@@ -412,7 +412,7 @@ mod tests {
         );
 
         start_profile("pool-multiexp");
-        b.iter(|| black_box(multiexp((g.clone(), 0), FullDensity, &v.clone()).unwrap()));
+        b.iter(|| black_box(multiexp((g.clone(), 0), FullDensity, &v).unwrap()));
         stop_profile();
     }
 
