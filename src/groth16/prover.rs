@@ -208,20 +208,17 @@ where
         return Err(SynthesisError::UnexpectedIdentity);
     }
 
-    let input_assignment = Arc::new(
-        prover
-            .input_assignment
-            .par_iter()
-            .map(|s| s.into_repr())
-            .collect::<Vec<_>>(),
-    );
-    let aux_assignment = Arc::new(
-        prover
-            .aux_assignment
-            .par_iter()
-            .map(|s| s.into_repr())
-            .collect::<Vec<_>>(),
-    );
+    let input_assignment = prover
+        .input_assignment
+        .par_iter()
+        .map(|s| s.into_repr())
+        .collect::<Vec<_>>();
+
+    let aux_assignment = prover
+        .aux_assignment
+        .par_iter()
+        .map(|s| s.into_repr())
+        .collect::<Vec<_>>();
 
     let input_assignment_len = input_assignment.len();
 
@@ -284,8 +281,8 @@ where
     ) = rayon::join(
         || {
             let (a_aux, a_inputs) = rayon::join(
-                || multiexp(a_aux_source, a_aux_density, aux_assignment.clone()),
-                || multiexp(a_inputs_source, FullDensity, input_assignment.clone()),
+                || multiexp(a_aux_source, a_aux_density, &aux_assignment),
+                || multiexp(a_inputs_source, FullDensity, &input_assignment),
             );
 
             let mut g_a = vk.delta_g1.mul(r);
@@ -305,27 +302,21 @@ where
                             multiexp(
                                 b_g1_inputs_source,
                                 b_input_density.clone(),
-                                input_assignment.clone(),
+                                &input_assignment,
                             )
                         },
-                        || {
-                            multiexp(
-                                b_g1_aux_source,
-                                b_aux_density.clone(),
-                                aux_assignment.clone(),
-                            )
-                        },
+                        || multiexp(b_g1_aux_source, b_aux_density.clone(), &aux_assignment),
                     );
 
                     let (b_g2_inputs, b_g2_aux) = rayon::join(
                         || {
                             multiexp(
                                 b_g2_inputs_source,
-                                b_input_density,
-                                input_assignment.clone(),
+                                b_input_density.clone(),
+                                &input_assignment,
                             )
                         },
-                        || multiexp(b_g2_aux_source, b_aux_density, aux_assignment.clone()),
+                        || multiexp(b_g2_aux_source, b_aux_density, &aux_assignment),
                     );
 
                     let mut g_b = vk.delta_g2.mul(s);
@@ -343,8 +334,8 @@ where
                 },
                 || {
                     rayon::join(
-                        || multiexp(h_params, FullDensity, a_for_h),
-                        || multiexp(l_params, FullDensity, aux_assignment.clone()),
+                        || multiexp(h_params, FullDensity, &a_for_h),
+                        || multiexp(l_params, FullDensity, &aux_assignment),
                     )
                 },
             )

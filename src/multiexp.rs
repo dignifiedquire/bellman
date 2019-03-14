@@ -43,7 +43,8 @@ impl<G: CurveAffine> Source<G> for (Arc<Vec<G>>, usize) {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "expected more bases from source",
-            ).into());
+            )
+            .into());
         }
 
         if self.0[self.1].is_zero() {
@@ -62,7 +63,8 @@ impl<G: CurveAffine> Source<G> for (Arc<Vec<G>>, usize) {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "expected more bases from source",
-            ).into());
+            )
+            .into());
         }
 
         self.1 += amt;
@@ -144,7 +146,7 @@ impl DensityTracker {
 fn multiexp_inner<Q, D, G, S>(
     bases: S,
     density_map: D,
-    exponents: Arc<Vec<<<G::Engine as Engine>::Fr as PrimeField>::Repr>>,
+    exponents: &[<<G::Engine as Engine>::Fr as PrimeField>::Repr],
     mut skip: u32,
     c: u32,
     handle_trivial: bool,
@@ -159,7 +161,6 @@ where
     skip += c;
 
     let bases = bases.clone();
-    let exponents = exponents.clone();
     let density_map = density_map.clone();
 
     let (first, second): (
@@ -170,7 +171,6 @@ where
             let skip = oldskip;
             // Perform this region of the multiexp
             let bases = bases.clone();
-            let exponents = exponents.clone();
             let density_map = density_map.clone();
 
             // Accumulate the result
@@ -215,7 +215,7 @@ where
             //                    (a) + b +
             //                    ((a) + b) + c
             let mut running_sum = G::Projective::zero();
-            for exp in buckets.into_iter().rev() {
+            for exp in buckets.iter().rev() {
                 running_sum.add_assign(&exp);
                 acc.add_assign(&running_sum);
             }
@@ -232,11 +232,12 @@ where
                 multiexp_inner(
                     bases.clone(),
                     density_map.clone(),
-                    exponents.clone(),
+                    exponents,
                     skip,
                     c,
                     false,
-                ).map(|mut higher| {
+                )
+                .map(|mut higher| {
                     for _ in 0..c {
                         higher.double();
                     }
@@ -261,7 +262,7 @@ where
 pub fn multiexp<Q, D, G, S>(
     bases: S,
     density_map: D,
-    exponents: Arc<Vec<<<G::Engine as Engine>::Fr as PrimeField>::Repr>>,
+    exponents: &[<<G::Engine as Engine>::Fr as PrimeField>::Repr],
 ) -> Result<<G as CurveAffine>::Projective, SynthesisError>
 where
     for<'a> &'a Q: QueryDensity,
@@ -293,9 +294,36 @@ mod tests {
     use rand::{self, Rand};
     use rayon::prelude::*;
     use std::sync::Arc;
-    use test::Bencher;
+    use test::{black_box, Bencher};
 
     const SAMPLES: usize = 1 << 8;
+
+    #[cfg(feature = "profile")]
+    use gperftools::profiler::PROFILER;
+
+    #[cfg(feature = "profile")]
+    #[inline(always)]
+    fn start_profile(stage: &str) {
+        PROFILER
+            .lock()
+            .unwrap()
+            .start(format!("./{}.profile", stage))
+            .unwrap();
+    }
+
+    #[cfg(not(feature = "profile"))]
+    #[inline(always)]
+    fn start_profile(_stage: &str) {}
+
+    #[cfg(feature = "profile")]
+    #[inline(always)]
+    fn stop_profile() {
+        PROFILER.lock().unwrap().stop().unwrap();
+    }
+
+    #[cfg(not(feature = "profile"))]
+    #[inline(always)]
+    fn stop_profile() {}
 
     fn naive_multiexp<G: CurveAffine>(
         bases: Arc<Vec<G>>,
@@ -345,7 +373,7 @@ mod tests {
 
         let naive = naive_multiexp(g.clone(), v.clone());
 
-        let fast = multiexp((g.clone(), 0), FullDensity, v.clone()).unwrap();
+        let fast = multiexp((g.clone(), 0), FullDensity, &v).unwrap();
 
         let par_iter = multiexp_par_iter(g.to_vec(), v.to_vec());
 
@@ -356,56 +384,50 @@ mod tests {
     #[bench]
     fn bench_multiexp_naive(b: &mut Bencher) {
         let rng = &mut rand::thread_rng();
+        let v = Arc::new(
+            (0..SAMPLES)
+                .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
+                .collect::<Vec<_>>(),
+        );
+        let g = Arc::new(
+            (0..SAMPLES)
+                .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
+                .collect::<Vec<_>>(),
+        );
 
-        b.iter(|| {
-            let v = Arc::new(
-                (0..SAMPLES)
-                    .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
-                    .collect::<Vec<_>>(),
-            );
-            let g = Arc::new(
-                (0..SAMPLES)
-                    .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
-                    .collect::<Vec<_>>(),
-            );
-
-            naive_multiexp(g, v)
-        });
+        b.iter(|| black_box(naive_multiexp(g.clone(), v.clone())));
     }
 
     #[bench]
     fn bench_multiexp_pool(b: &mut Bencher) {
         let rng = &mut rand::thread_rng();
+        let v = (0..SAMPLES)
+            .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
+            .collect::<Vec<_>>();
 
-        b.iter(|| {
-            let v = Arc::new(
-                (0..SAMPLES)
-                    .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
-                    .collect::<Vec<_>>(),
-            );
-            let g = Arc::new(
-                (0..SAMPLES)
-                    .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
-                    .collect::<Vec<_>>(),
-            );
+        let g = Arc::new(
+            (0..SAMPLES)
+                .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
+                .collect::<Vec<_>>(),
+        );
 
-            multiexp((g, 0), FullDensity, v).unwrap()
-        });
+        start_profile("pool-multiexp");
+        b.iter(|| black_box(multiexp((g.clone(), 0), FullDensity, &v.clone()).unwrap()));
+        stop_profile();
     }
 
     #[bench]
     fn bench_multiexp_par_iter(b: &mut Bencher) {
         let rng = &mut rand::thread_rng();
+        let v = (0..SAMPLES)
+            .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
+            .collect::<Vec<_>>();
+        let g = (0..SAMPLES)
+            .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
+            .collect::<Vec<_>>();
 
-        b.iter(|| {
-            let v = (0..SAMPLES)
-                .map(|_| <Bls12 as Engine>::Fr::rand(rng).into_repr())
-                .collect::<Vec<_>>();
-            let g = (0..SAMPLES)
-                .map(|_| <Bls12 as Engine>::G1::rand(rng).into_affine())
-                .collect::<Vec<_>>();
-
-            multiexp_par_iter(g, v)
-        });
+        start_profile("par-iter");
+        b.iter(|| black_box(multiexp_par_iter(g.clone(), v.clone())));
+        stop_profile();
     }
 }

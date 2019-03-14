@@ -9,6 +9,9 @@ extern crate pairing;
 extern crate rand;
 extern crate rayon;
 
+#[cfg(all(test, feature = "profile"))]
+extern crate gperftools;
+
 pub mod domain;
 pub mod groth16;
 pub mod multicore;

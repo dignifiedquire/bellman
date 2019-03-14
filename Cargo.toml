@@ -18,3 +18,7 @@ rayon = "1.0"
 
 [features]
 default = []
+profile = []
+
+[dev-dependencies]
+gperftools = "0.2.0"
