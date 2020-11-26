@@ -35,6 +35,7 @@ pub use self::prove::*;
 pub use self::srs::*;
 pub use self::verify::*;
 
+/// Returns vector of size num: [1, s^2, s^4, ..., s^(2num-2) ]
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     println!("structured scalar power");
     let mut powers = vec![F::one()];
@@ -44,6 +45,7 @@ fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     for i in 1..num {
         let mut x = powers[i - 1];
         x.mul_assign(&s2);
+        println!("Position {} -> push {:?}", i, &x);
         powers.push(x);
     }
     dbg!(&powers);

@@ -22,7 +22,9 @@ pub struct VerifierSRS<E: Engine> {
 
 impl<E: Engine> SRS<E> {
     pub fn get_commitment_keys(&self) -> (Vec<E::G2>, Vec<E::G1>) {
+        // v
         let ck_1 = self.h_beta_powers.iter().step_by(2).cloned().collect();
+        // w
         let ck_2 = self.g_alpha_powers.iter().step_by(2).cloned().collect();
         (ck_1, ck_2)
     }
@@ -37,6 +39,14 @@ impl<E: Engine> SRS<E> {
     }
 }
 
+/// Returns SRS struct containings
+/// - two random scalars alpha and beta
+/// - two vectors of size `2 * size - 1`
+///   + g_alpha_powers: g^alpha^0, g^alpha^1, ... g^alpha^(2n-2)
+///   + g_beta_powers: h^beta^0, h^beta^1, ... , h^beta^(2n-2)
+/// - g^beta
+/// - h^alpha
+/// All these values are described in setup phase of TIPP protocol
 pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize) -> SRS<E> {
     println!("setup inner product");
     let alpha = E::Fr::random(rng);
@@ -57,6 +67,7 @@ pub fn setup_inner_product<E: Engine, R: rand::RngCore>(rng: &mut R, size: usize
     }
 }
 
+/// Returns g^s^1, g^s^2, ... g^s^(num-1)
 fn structured_generators_scalar_power<G: CurveProjective>(
     num: usize,
     g: &G,
