@@ -74,11 +74,11 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
         .map(|proof| proof.c.into_projective())
         .collect::<Vec<E::G1>>();
 
-    let (ck_1, ck_2) = ip_srs.get_commitment_keys();
+    let (ck_1, ck_2) = ip_srs.get_commitment_keys(); // (v, w)
 
-    let com_a = inner_product::pairing::<E>(&a, &ck_1);
-    let com_b = inner_product::pairing::<E>(&ck_2, &b);
-    let com_c = inner_product::pairing::<E>(&c, &ck_1);
+    let com_a = inner_product::pairing::<E>(&a, &ck_1); // T
+    let com_b = inner_product::pairing::<E>(&ck_2, &b); // U
+    let com_c = inner_product::pairing::<E>(&c, &ck_1); // V
 
     // Random linear combination of proofs
     let mut counter_nonce: usize = 0;
@@ -97,7 +97,15 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
         counter_nonce += 1;
     };
 
+    // Just to easily eyeball values of `r`.
+    // let r = {
+    //     let mut x = E::Fr::one();
+    //     x.add_assign(&E::Fr::one());
+    //     x
+    // }; // two
+
     let r_vec = structured_scalar_power(proofs.len(), &r);
+
     let a_r = a
         .iter()
         .zip(&r_vec)
@@ -107,8 +115,8 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
             a
         })
         .collect::<Vec<E::G1>>();
-    let ip_ab = inner_product::pairing::<E>(&a_r, &b);
-    let agg_c = inner_product::multiexponentiation::<E::G1>(&c, &r_vec);
+    let ip_ab = inner_product::pairing::<E>(&a_r, &b); // Z
+    let agg_c = inner_product::multiexponentiation::<E::G1>(&c, r_vec.as_slice());
 
     let ck_1_r = ck_1
         .iter()
@@ -118,21 +126,24 @@ pub fn aggregate_proofs<E: Engine, D: Digest>(
             ck.mul_assign(r.inverse().unwrap());
             ck
         })
-        .collect::<Vec<E::G2>>();
+        .collect::<Vec<E::G2>>(); // v^(r^-1)
 
+    // T = A * v = A^r * v^(r^-1)
     assert_eq!(com_a, inner_product::pairing::<E>(&a_r, &ck_1_r));
 
     println!("prove with srs shift");
+    // TIPP
     let tipa_proof_ab = prove_with_srs_shift::<E, D>(&ip_srs, (&a_r, &b), (&ck_1_r, &ck_2), &r);
 
     println!("prove with structured scalar messages");
+    // MIPP
     let tipa_proof_c = prove_with_structured_scalar_message::<E, D>(&ip_srs, (&c, &r_vec), &ck_1);
 
     AggregateProof {
-        com_a,
-        com_b,
-        com_c,
-        ip_ab,
+        com_a, // T
+        com_b, // U
+        com_c, // V
+        ip_ab, // Z
         agg_c,
         tipa_proof_ab,
         tipa_proof_c,

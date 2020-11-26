@@ -38,10 +38,14 @@ pub use self::verify::*;
 fn structured_scalar_power<F: Field>(num: usize, s: &F) -> Vec<F> {
     println!("structured scalar power");
     let mut powers = vec![F::one()];
+    let mut s2 = s.clone();
+    s2.mul_assign(&s);
+
     for i in 1..num {
         let mut x = powers[i - 1];
-        x.mul_assign(s);
+        x.mul_assign(&s2);
         powers.push(x);
     }
+    dbg!(&powers);
     powers
 }

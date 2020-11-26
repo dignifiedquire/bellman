@@ -45,15 +45,22 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
         &r,
         &proof.tipa_proof_c,
     );
+    // assert!(tipa_proof_ab_valid, "TIPP failed.");
+    // assert!(tipa_proof_c_valid, "MIPP failed.");
 
     // Check aggregate pairing product equation
-
-    let mut r_sum = r.pow(&[public_inputs.len() as u64]);
-    r_sum.sub_assign(&E::Fr::one());
-    let mut r_one = r;
-    r_one.sub_assign(&E::Fr::one());
-    r_one.negate();
-    r_sum.mul_assign(&r_one); // TODO: check that div r_one is this
+    // {
+    // let mut r_sum2 = r.pow(&[public_inputs.len() as u64]);
+    // r_sum2.sub_assign(&E::Fr::one());
+    // let mut r_div = r.clone();
+    // r_div.sub_assign(&E::Fr::one());
+    // r_div.inverse();
+    // r_sum.mul_assign(&r_div);
+    // }
+    let mut r_sum = E::Fr::zero();
+    for j in 0..public_inputs.len() {
+        r_sum.add_assign(&r.clone().pow(&[2 * j as u64]));
+    }
 
     let p1 = {
         let mut alpha_g1_r_sum = vk.alpha_g1.into_projective();
@@ -65,6 +72,7 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
     let r_vec = structured_scalar_power(public_inputs.len(), &r);
     let mut g_ic = vk.ic[0].into_projective();
     g_ic.mul_assign(r_sum);
+
     for (i, b) in vk.ic.iter().skip(1).enumerate() {
         let mut x = b.into_projective();
         x.mul_assign(inner_product::scalar(
@@ -83,6 +91,7 @@ pub fn verify_aggregate_proof<E: Engine, D: Digest>(
     p1_p2_p3.mul_assign(&p2);
     p1_p2_p3.mul_assign(&p3);
     let ppe_valid = proof.ip_ab == p1_p2_p3;
+    assert!(ppe_valid, "outer verification failed");
 
     tipa_proof_ab_valid && tipa_proof_c_valid && ppe_valid
 }
